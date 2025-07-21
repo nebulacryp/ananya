@@ -115,7 +115,7 @@ async def get_gemini_reply(user_message: str, user_id: int, user_name: str):
 
     except Exception as e:
         logging.error(f"Gemini API error: {e}")
-        return "Aww mujhe lagta hai kuch issue ho gaya 😢 thodi der baad try karo na!"
+        return "Busy hun abhi, baat mai baat karte hai"
 
 # 📥 Telegram message handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
