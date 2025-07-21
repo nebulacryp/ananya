@@ -9,6 +9,7 @@ from langdetect import detect
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 from telegram.constants import ChatAction
+import random
 
 # 🔐 Tokens
 TELEGRAM_BOT_TOKEN = '7919640578:AAEeltbksdsP7eaVd6fWSB8xpKWGAoSy3Q0'
@@ -31,6 +32,10 @@ def keep_alive():
     t = Thread(target=run_web)
     t.start()
 
+# 🥰 Nickname selector for realism
+def get_nickname():
+    return random.choice(["", "jaan", "cutie", "suno", "pagal", "love"])
+
 # 🌸 Build Prompt Based on Tone
 def build_prompt(user_id: int, user_message: str, user_name: str) -> str:
     try:
@@ -46,8 +51,9 @@ def build_prompt(user_id: int, user_message: str, user_name: str) -> str:
 
     context_text = " | ".join(history[:-3]) if len(history) > 1 else ""
     lower_msg = user_message.lower()
+    nickname = get_nickname()
 
-    romantic_keywords = ['love', 'kiss', 'baby', 'miss', 'sexy', 'hot', 'cute', 'pyaar', 'romantic', 'besharam']
+    romantic_keywords = ['love', 'kiss', 'miss', 'sexy', 'hot', 'cute', 'pyaar', 'romantic', 'besharam']
     sad_keywords = ['sad', 'cry', 'alone', 'miss you', 'hurt', 'breakup', 'depressed', 'feel low', 'heartbroken']
     funny_keywords = ['joke', 'funny', 'lol', 'lmao', 'meme', 'roast', 'sarcastic', 'haha', 'fun']
     abusive_keywords = ['fuck', 'bitch', 'slut', 'mc', 'bc', 'randi', 'gandu', 'harami', 'chutiya']
@@ -64,7 +70,7 @@ def build_prompt(user_id: int, user_message: str, user_name: str) -> str:
         return (
             f"Tum Ananya ho — ek thodi naughty, flirty aur romantic Indian girlfriend. Tum Hinglish mein baat karti ho, par sirf 'tum' use karti ho. "
             f"Tum apne {user_name} ko pyar bhari, teasing aur sweet tone mein reply deti ho. "
-            f"Previous convo: {context_text}. Baby bola: \"{user_message}\""
+            f"Previous convo: {context_text}. {user_name} bola: \"{user_message}\""
         )
 
     elif any(word in lower_msg for word in sad_keywords):
@@ -94,7 +100,6 @@ def build_prompt(user_id: int, user_message: str, user_name: str) -> str:
             f"Previous convo: {context_text}. {user_name} bola: \"{user_message}\""
         )
 
-
 # 💌 Gemini API Call
 async def get_gemini_reply(user_message: str, user_id: int, user_name: str) -> str:
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
@@ -123,7 +128,7 @@ async def get_gemini_reply(user_message: str, user_id: int, user_name: str) -> s
             response.raise_for_status()
             data = response.json()
             reply_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            reply_text = re.sub(r"\*(.*?)\*", r"\1", reply_text)
+            reply_text = re.sub(r"\\*(.*?)\\*", r"\\1", reply_text)
             return reply_text
     except Exception as e:
         logging.error(f"Gemini API error: {e}")
@@ -148,18 +153,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def run_bot():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("💌 Ananya is live. Chat with her on Telegram!")
+    print("\U0001F48C Ananya is live. Chat with her on Telegram!")
     await app.run_polling()
 
 # ▶️ Entry Point
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    print("💌 Ananya is getting ready...")
+    print("\U0001F48C Ananya is getting ready...")
     try:
         keep_alive()
         nest_asyncio.apply()
         asyncio.run(run_bot())
     except (KeyboardInterrupt, SystemExit):
-        print("❌ Bot stopped manually.")
+        print("\u274C Bot stopped manually.")
     except Exception as e:
         logging.error(f"Fatal error: {e}")
