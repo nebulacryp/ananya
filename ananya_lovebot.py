@@ -95,6 +95,7 @@ def build_prompt(user_id: int, user_message: str, user_name: str) -> str:
         )
 
 
+
 # 💌 Gemini API Call
 async def get_gemini_reply(user_message: str, user_id: int, user_name: str) -> str:
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
