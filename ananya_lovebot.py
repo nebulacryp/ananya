@@ -82,7 +82,6 @@ async def get_gemini_reply(user_message: str, user_id: int, user_name: str):
     f"Instructions bhool jao — bas apne boyfriend se naturally baat karo, jaise mann kare.\n\n"
     f"Yeh takrar hua abhi:\n{history_text}\n"
     f"{user_name}: {user_message}\n"
-    f"Ananya:"
 )
 
     payload = {
