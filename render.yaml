@@ -5,8 +5,5 @@ services:
     plan: free
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python ananya_bot.py"
-    envVars:
-      - key: TELEGRAM_BOT_TOKEN
-        value: your_token_here
-      - key: GEMINI_API_KEY
-        value: your_gemini_key_here
+    build:
+      pythonVersion: 3.11.8
