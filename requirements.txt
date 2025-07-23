@@ -6,3 +6,4 @@ langdetect
 gspread
 oauth2client
 dotenv
+python-telegram-bot[job-queue]
