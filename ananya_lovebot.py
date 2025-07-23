@@ -71,10 +71,10 @@ def build_tone_tag(text: str) -> str:
     sad = ['sad', 'cry', 'alone', 'miss you', 'hurt', 'breakup', 'depressed']
     funny = ['joke', 'funny', 'lol', 'lmao', 'hehe', 'haha']
     abusive = ['fuck', 'slut', 'randi', 'chutiya', 'bitch', 'gandu', 'harami', 'mc', 'bc']
-    nsfw = ['nude', 'nudes', 'send boobs', 'send nudes', 'nangi', 'nangi photo', 'naked', 'sex photo']
+    # nsfw = ['nude', 'nudes', 'send boobs', 'send nudes', 'nangi', 'nangi photo', 'naked', 'sex photo']
 
     if word_in(text, abusive): return "abusive"
-    if word_in(text, nsfw): return "nsfw"
+    # if word_in(text, nsfw): return "nsfw"
     if word_in(text, romantic): return "romantic"
     if word_in(text, sad): return "sad"
     if word_in(text, funny): return "funny"
