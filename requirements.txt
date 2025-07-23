@@ -5,3 +5,4 @@ nest_asyncio
 langdetect
 gspread
 oauth2client
+dotenv
