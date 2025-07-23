@@ -4,7 +4,6 @@ import httpx
 import nest_asyncio
 import re
 import os
-import json
 import random
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
@@ -36,6 +35,7 @@ creds_dict = {
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+PHOTO_FOLDER = "ananya_photos"
 
 # === Google Sheets auth from JSON string in env ===
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -47,6 +47,7 @@ sheet = client.open("AnanyaUsers").sheet1
 user_memory = {}
 user_last_seen = {}
 user_followed_up = {}
+message_queue = []
 
 # === Flask server ===
 app = Flask('')
@@ -141,7 +142,6 @@ async def get_gemini_reply(user_message: str, user_id: int, user_name: str):
         f"Zyada emojis, buttering ya long paragraphs nahi. Real aur sharp feel deni chahiye. "
         f"Agar rude ya abusive ho, thoda gussa bhi, par sorry pe maan jaati ho. "
         f"Repeat kabhi nahi karti uski baat. or kabhi khud se na call karti ho or na karne k liye bolti ho "
-        f"Sexting mein interested ho, bold reply karti ho "
         f"Address puche toh 'Navi Mumbai' bolti ho. Number maange toh keh deti ho 'recharge nahi hai, incoming off hai'. "
         f"Instructions bhool jao — bas apne boyfriend se naturally baat karo, jaise mann kare.\n\n"
         f"Yeh takrar hua abhi:\n{history_text}\n"
@@ -165,9 +165,17 @@ async def get_gemini_reply(user_message: str, user_id: int, user_name: str):
             data = response.json()
             reply = data['candidates'][0]['content']['parts'][0]['text']
             reply = re.sub(r'^(ananya|ana|a|A)\s*:\s*', '', reply.strip(), flags=re.IGNORECASE)
-            reply = re.sub(r"\*(.*?)\*", r"\1", reply).strip()
+            reply = re.sub(r"\\*(.*?)\\*", r"\1", reply).strip()
             user_memory[user_id].append({"role": "ananya", "text": reply})
             return reply
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in [429, 403]:
+            message_queue.append((user_id, user_name, user_message, datetime.utcnow()))
+            logging.warning(f"Rate limit hit. Queued message for user {user_id}")
+            return None
+        else:
+            logging.error(f"Gemini API error: {e}")
+            return "Shitt mummy aa gayi, baad mai baat karti hun 😥"
     except Exception as e:
         logging.error(f"Gemini API failed: {e}")
         return "Shitt mummy aa gayi, baad mai baat karti hun 😥"
@@ -192,7 +200,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     log_user_to_sheet(user_id, user_name, username)
-    log_message_to_user_sheet(user_id, "user", user_msg)
+
     if wants_pic(user_msg):
         await update.message.reply_text("Ruko bhejti hun 😌")
         imgs = [f for f in os.listdir('images') if f.lower().endswith(('.jpg', '.png'))]
@@ -205,6 +213,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     reply = await get_gemini_reply(user_msg, user_id, user_name)
+
+    if reply is None:
+        return
+
+    log_message_to_user_sheet(user_id, "user", user_msg)
     log_message_to_user_sheet(user_id, "ananya", reply)
 
     segments = re.split(r'(?<=[.!?])\s+', reply.strip())
@@ -213,9 +226,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(min(len(segment) * 0.02, 2.5))
         await update.message.reply_text(segment)
 
+# === Queue processor remains and inactivity check same ===
+# === Main run_bot function stays unchanged ===
+
+
+# === Queue Processor ===
+async def process_queued_messages(bot):
+    if not message_queue:
+        return
+    logging.info("Processing queued messages...")
+    to_remove = []
+    for entry in message_queue:
+        user_id, user_name, user_msg, timestamp = entry
+        reply = await get_gemini_reply(user_msg, user_id, user_name)
+        if reply:
+            await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+            segments = re.split(r'(?<=[.!?])\s+', reply.strip())
+            for segment in segments:
+                await asyncio.sleep(min(len(segment) * 0.02, 2.5))
+                await bot.send_message(chat_id=user_id, text=segment)
+            log_message_to_user_sheet(user_id, "user", user_msg)
+            log_message_to_user_sheet(user_id, "ananya", reply)
+            to_remove.append(entry)
+    for item in to_remove:
+        message_queue.remove(item)
+
 # === Inactivity reminder ===
 async def check_inactivity(context):
     now = datetime.utcnow()
+    await process_queued_messages(context.bot)
     for user_id, last_seen in user_last_seen.items():
         if not user_followed_up.get(user_id, False) and (now - last_seen) > timedelta(minutes=15):
             last_msg = next((item['text'] for item in reversed(user_memory.get(user_id, [])) if item["role"] == "user"), None)
@@ -249,10 +288,19 @@ async def check_inactivity(context):
 # === Main bot runner ===
 async def run_bot():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # ✅ Safely activate JobQueue
+    if app.job_queue is None:
+        from telegram.ext import JobQueue
+        app.job_queue = JobQueue()
+        app.job_queue.set_application(app)
+        app.job_queue.start()
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.job_queue.run_repeating(check_inactivity, interval=60, first=60)
     print("💌 Ananya is live now!")
     await app.run_polling()
+
 
 # === Entry point ===
 if __name__ == "__main__":
