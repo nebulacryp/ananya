@@ -237,18 +237,20 @@ async def process_queued_messages(bot):
         return
     logging.info("Processing queued messages...")
     to_remove = []
-    for entry in message_queue:
+    for entry in list(message_queue):
         user_id, user_name, user_msg, timestamp = entry
-        reply = await get_gemini_reply(user_msg, user_id, user_name)
-        if reply:
-            await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
-            segments = re.split(r'(?<=[.!?])\s+', reply.strip())
-            for segment in segments:
-                await asyncio.sleep(min(len(segment) * 0.02, 2.5))
-                await bot.send_message(chat_id=user_id, text=segment)
-            log_message_to_user_sheet(user_id, "user", user_msg)
-            log_message_to_user_sheet(user_id, "ananya", reply)
-            to_remove.append(entry)
+        # Only retry if at least 1 hour older
+        if (datetime.utcnow() - timestamp).total_seconds() >= 3600:
+            reply = await get_gemini_reply(user_msg, user_id, user_name)
+            if reply:
+                await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+                segments = re.split(r'(?<=[.!?])\s+', reply.strip())
+                for segment in segments:
+                    await asyncio.sleep(min(len(segment) * 0.02, 2.5))
+                    await bot.send_message(chat_id=user_id, text=segment)
+                log_message_to_user_sheet(user_id, "user", user_msg)
+                log_message_to_user_sheet(user_id, "ananya", reply)
+                to_remove.append(entry)
     for item in to_remove:
         message_queue.remove(item)
 
