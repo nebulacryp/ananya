@@ -1,3 +1,4 @@
+# === Imports and Constants remain same ===
 import logging
 import asyncio
 import httpx
@@ -18,6 +19,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # === Load .env ===
 load_dotenv()
 
+# === Google API credentials and setup ===
 creds_dict = {
     "type": os.getenv("GOOGLE_TYPE"),
     "project_id": os.getenv("GOOGLE_PROJECT_ID"),
@@ -30,26 +32,24 @@ creds_dict = {
     "auth_provider_x509_cert_url": os.getenv("GOOGLE_AUTH_PROVIDER_X509_CERT_URL"),
     "client_x509_cert_url": os.getenv("GOOGLE_CLIENT_X509_CERT_URL")
 }
-
-# === Credentials from env ===
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-PHOTO_FOLDER = "ananya_photos"
-
-# === Google Sheets auth from JSON string in env ===
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)  
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 sheet = client.open("AnanyaUsers").sheet1
 
-# === In-memory state ===
+# === Bot Tokens ===
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+
+# === State ===
 user_memory = {}
 user_last_seen = {}
 user_followed_up = {}
 message_queue = []
+replied_messages = set()  # ✅ Track replied messages to avoid retries
 
-# === Flask server ===
+# === Flask keep-alive ===
 app = Flask('')
 
 @app.route('/')
@@ -63,6 +63,7 @@ def keep_alive():
     t = Thread(target=run_web)
     t.start()
 
+# === Helpers ===
 def word_in(message, word_list):
     return any(re.search(rf'\b{re.escape(word)}\b', message.lower()) for word in word_list)
 
@@ -71,10 +72,8 @@ def build_tone_tag(text: str) -> str:
     sad = ['sad', 'cry', 'alone', 'miss you', 'hurt', 'breakup', 'depressed']
     funny = ['joke', 'funny', 'lol', 'lmao', 'hehe', 'haha']
     abusive = ['fuck', 'slut', 'randi', 'chutiya', 'bitch', 'gandu', 'harami', 'mc', 'bc']
-    # nsfw = ['nude', 'nudes', 'send boobs', 'send nudes', 'nangi', 'nangi photo', 'naked', 'sex photo']
 
     if word_in(text, abusive): return "abusive"
-    # if word_in(text, nsfw): return "nsfw"
     if word_in(text, romantic): return "romantic"
     if word_in(text, sad): return "sad"
     if word_in(text, funny): return "funny"
@@ -88,7 +87,7 @@ def wants_pic(msg):
     keywords = ["pic", "photo", "image", "send your pic", "tumhari photo", "tum dikho"]
     return any(re.search(rf'\b{re.escape(k)}\b', msg.lower()) for k in keywords)
 
-# === Google Sheet Logging ===
+# === Sheet logging ===
 def log_user_to_sheet(user_id, name, username):
     try:
         str_id = str(user_id)
@@ -115,7 +114,7 @@ def log_message_to_user_sheet(user_id: int, who: str, message: str):
     except Exception as e:
         logging.warning(f"Failed to log chat for {user_id}: {e}")
 
-# === Gemini API Call ===
+# === Gemini Call with reply tracking ===
 async def get_gemini_reply(user_message: str, user_id: int, user_name: str):
     headers = {
         "Content-Type": "application/json",
@@ -168,6 +167,11 @@ async def get_gemini_reply(user_message: str, user_id: int, user_name: str):
             reply = re.sub(r'^(ananya|ana|a|A)\s*:\s*', '', reply.strip(), flags=re.IGNORECASE)
             reply = re.sub(r"\\*(.*?)\\*", r"\1", reply).strip()
             user_memory[user_id].append({"role": "ananya", "text": reply})
+
+            # ✅ Mark message as replied
+            msg_hash = f"{user_id}-{hash(user_message)}"
+            replied_messages.add(msg_hash)
+
             return reply
     except httpx.HTTPStatusError as e:
         if e.response.status_code in [429, 403]:
@@ -181,7 +185,38 @@ async def get_gemini_reply(user_message: str, user_id: int, user_name: str):
         logging.error(f"Gemini API failed: {e}")
         return "Shitt mummy aa gayi, baad mai baat karti hun 😥"
 
-# === Telegram + Logging ===
+# === Retry queue updated ===
+async def process_queued_messages(bot):
+    if not message_queue:
+        return
+    logging.info("Processing queued messages...")
+    to_remove = []
+    for entry in list(message_queue):
+        user_id, user_name, user_msg, timestamp = entry
+
+        # ✅ Skip if already replied
+        msg_hash = f"{user_id}-{hash(user_msg)}"
+        if msg_hash in replied_messages:
+            logging.info(f"Skipping duplicate queued message for {user_id}")
+            to_remove.append(entry)
+            continue
+
+        if (datetime.utcnow() - timestamp).total_seconds() >= 3600:
+            reply = await get_gemini_reply(user_msg, user_id, user_name)
+            if reply:
+                await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+                segments = re.split(r'(?<=[.!?])\s+', reply.strip())
+                for segment in segments:
+                    await asyncio.sleep(min(len(segment) * 0.02, 2.5))
+                    await bot.send_message(chat_id=user_id, text=segment)
+                log_message_to_user_sheet(user_id, "user", user_msg)
+                log_message_to_user_sheet(user_id, "ananya", reply)
+                to_remove.append(entry)
+    for item in to_remove:
+        message_queue.remove(item)
+
+# === Rest of the code (handle_message, inactivity, run_bot) remains unchanged ===
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -226,33 +261,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
         await asyncio.sleep(min(len(segment) * 0.02, 2.5))
         await update.message.reply_text(segment)
-
-# === Queue processor remains and inactivity check same ===
-# === Main run_bot function stays unchanged ===
-
-
-# === Queue Processor ===
-async def process_queued_messages(bot):
-    if not message_queue:
-        return
-    logging.info("Processing queued messages...")
-    to_remove = []
-    for entry in list(message_queue):
-        user_id, user_name, user_msg, timestamp = entry
-        # Only retry if at least 1 hour older
-        if (datetime.utcnow() - timestamp).total_seconds() >= 3600:
-            reply = await get_gemini_reply(user_msg, user_id, user_name)
-            if reply:
-                await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
-                segments = re.split(r'(?<=[.!?])\s+', reply.strip())
-                for segment in segments:
-                    await asyncio.sleep(min(len(segment) * 0.02, 2.5))
-                    await bot.send_message(chat_id=user_id, text=segment)
-                log_message_to_user_sheet(user_id, "user", user_msg)
-                log_message_to_user_sheet(user_id, "ananya", reply)
-                to_remove.append(entry)
-    for item in to_remove:
-        message_queue.remove(item)
 
 # === Inactivity reminder ===
 async def check_inactivity(context):
